@@ -1,0 +1,7 @@
+{
+    "sketch": "abcs-daisy-1/abcs-daisy-1.ino",
+    "configuration": "pnum=DAISY_SEED,upload_method=dfuMethod,xserial=generic,usb=CDCgen,xusb=FS,opt=osstd,dbg=none,rtlib=nano",
+    "board": "STMicroelectronics:stm32:GenH7",
+    "port": "/dev/tty.usbmodem3965337233301",
+    "output": "build"
+}
