@@ -4,16 +4,21 @@ class AbcsSynthVoice2
 {
 private:
   Oscillator osc;
-  Oscillator lfo;
   MoogLadder flt;
 
   float modsig;
+  float modsig2;
   float oscFreq;
   float lfoFreq;
   float lfoDepth;
+  float prevDepth;
   float dc_os_;
   uint8_t waveform;
   uint8_t lfoTarget;
+
+  /* efficient LFO: https://www.earlevel.com/main/2003/03/02/the-digital-state-variable-filter/ */
+  float sinZ = 0.0;
+  float cosZ = 1.0;
 
 public:
   AbcsSynthVoice2(){};
@@ -22,19 +27,16 @@ public:
   void Init(float sample_rate)
   {
     osc.Init(sample_rate);
-    lfo.Init(sample_rate);
     flt.Init(sample_rate);
 
     modsig = 0.0f;
     oscFreq = 0.0f;
     lfoFreq = 2.0f;
     lfoDepth = 1.0f;
+    prevDepth = 1.0f;
     dc_os_ = 0.0f;
 
     osc.SetAmp(1.0f);
-
-    lfo.SetWaveform(lfo.WAVE_SIN);
-    lfo.SetFreq(2.0f);
 
     flt.SetFreq(10000);
     flt.SetRes(0.2);
@@ -44,13 +46,18 @@ public:
 
   float Process()
   {
-    float lfoVal = lfo.Process();
+    float f = lfoFreq / 10000.0;
+
+    // iterate oscillator
+    sinZ = sinZ + f * cosZ;
+    cosZ = cosZ - f * sinZ;
+    // modsig2 = sinZ / 2 + 1.0;
 
     /* Vibrato */
     if (lfoTarget == 0)
     {
-      modsig = dc_os_ - 1.0 + lfoVal * (oscFreq * 0.1);
-      osc.SetFreq(oscFreq + modsig);
+      modsig2 = lfoDepth * (oscFreq * 0.1) * sinZ / 2;
+      osc.SetFreq(oscFreq + modsig2);
     }
     else
     {
@@ -62,8 +69,8 @@ public:
     /* Tremolo */
     if (lfoTarget == 1)
     {
-      modsig = dc_os_ + lfoVal;
-      sig *= modsig;
+      modsig2 = sinZ / 2 + 1.0;
+      sig = sig * (1 - lfoDepth) + (sig * modsig2) * lfoDepth;
     }
 
     if (waveform == Oscillator::WAVE_POLYBLEP_SAW)
@@ -96,23 +103,17 @@ public:
   void SetLfoFreq(float freq)
   {
     lfoFreq = freq;
-    lfo.SetFreq(lfoFreq);
+    /* Auto set depth based on freq */
+    SetLfoDepth(fclamp(freq / 4, 0.f, 1.f));
   }
 
   void SetLfoDepth(float depth)
   {
-    depth = fclamp(depth, 0.f, 1.f);
-    lfoDepth = depth;
-    depth *= .5f;
-    lfo.SetAmp(depth);
-    dc_os_ = 1.f - depth;
+    lfoDepth = depth * 0.05 + prevDepth * 0.95;
+    prevDepth = lfoDepth;
   }
 
   void SetFilterCutoff(float freq) { flt.SetFreq(freq); }
 
   void SetAmp(float amp) { osc.SetAmp(amp); }
 };
-
-// Oscillator AbcsSynthVoice2::osc;
-// Oscillator AbcsSynthVoice2::lfo;
-// MoogLadder AbcsSynthVoice2::flt;

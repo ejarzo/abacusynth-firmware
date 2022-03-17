@@ -7,14 +7,19 @@
   ],
  */
 
-#include "DaisyDuino.h"
-#include "./abcs-synth-voice2.h"
-
 #include <Wire.h>
+#include "DaisyDuino.h"
 #include "Adafruit_VL6180X.h"
 
 #define TCAADDR 0x70
 #define NUM_WAVEFORMS 4
+#define NUM_SYNTHVOICES 2
+#define NUM_RODS 2
+
+#include "./abcs-synth-voice2.h"
+#include "./abcs-rod.h"
+
+using namespace daisysp;
 
 uint8_t waveforms[NUM_WAVEFORMS] = {
     Oscillator::WAVE_SIN,
@@ -24,183 +29,29 @@ uint8_t waveforms[NUM_WAVEFORMS] = {
 };
 
 static AdEnv ad;
-static Parameter cutoffParam, lfoFreqParam, lfoDepthCtrlParam;
+static Parameter cutoffParam, lfoFreqParam, lfoDepthCtrlParam, photoCellParam;
 static int waveform;
 
 int noteVal, wave, oscLfoTarget;
 float oscFreq, cutoff, lfoFreqCtrl, lfoDepthCtrl;
 float attack, release;
-float oldk1, oldk2, k1, k2;
+float oldk1, oldk2, oldk3, k1, k2, k3;
+
+int activeVoice = 0;
 
 Adafruit_VL6180X vl1 = Adafruit_VL6180X();
 DaisyHardware pod;
-AbcsSynthVoice2 synthVoice1;
-AbcsSynthVoice2 synthVoice2;
-AbcsSynthVoice2 synthVoice3;
 
-/* =============================== */
+// AnalogControl photoCellCtrl;
 
-class AbcsRod
-{
-private:
-  int tcaIndex;
-  Adafruit_VL6180X vl = Adafruit_VL6180X();
+AbcsSynthVoice2 synthVoices[NUM_SYNTHVOICES];
 
-  const byte PulsesPerRevolution = 2;
-  const unsigned long ZeroTimeout = 500000;
-  const byte numReadings = 4;
+// AbcsRod rod0 = AbcsRod(0, PIN_A1);
+// AbcsRod rod1 = AbcsRod(1, PIN_A2);
 
-  volatile unsigned long LastTimeWeMeasured;
-  volatile unsigned long PeriodBetweenPulses = ZeroTimeout + 10;
-  volatile unsigned long PeriodAverage = ZeroTimeout + 10;
-  unsigned long FrequencyRaw;
-  unsigned long FrequencyReal;
-  unsigned long RPM;
-  unsigned int PulseCounter = 1;
-  unsigned long PeriodSum;
-
-  unsigned long LastTimeCycleMeasure = LastTimeWeMeasured;
-  unsigned long CurrentMicros = micros();
-  unsigned int AmountOfReadings = 1;
-  unsigned int ZeroDebouncingExtra;
-  unsigned long readings[4];
-  unsigned long readIndex;
-  unsigned long total;
-  unsigned int average;
-
-  int currTime = 0;
-  int prevTime = 0;
-  int pulse = 0;
-  int timeBetweenPulse = 0;
-  int count = 0;
-  int pulse2 = 0;
-
-  int prevCount = 0;
-
-  unsigned long previousTime = 0;
-
-  int PERIOD = 1;
-
-public:
-  AbcsRod(uint8_t index);
-  ~AbcsRod();
-  void Init();
-  float GetDistance();
-  float GetRotationSpeed()
-  {
-    return average / 60.0;
-  };
-  void updateVelocityAverage()
-  {
-    LastTimeCycleMeasure = LastTimeWeMeasured;
-    CurrentMicros = micros();
-    if (CurrentMicros < LastTimeCycleMeasure)
-    {
-      LastTimeCycleMeasure = CurrentMicros;
-    }
-    FrequencyRaw = 10000000000 / PeriodAverage;
-    if (PeriodBetweenPulses > ZeroTimeout - ZeroDebouncingExtra || CurrentMicros - LastTimeCycleMeasure > ZeroTimeout - ZeroDebouncingExtra)
-    {
-      FrequencyRaw = 0; // Set frequency as 0.
-      ZeroDebouncingExtra = 2000;
-    }
-    else
-    {
-      ZeroDebouncingExtra = 0;
-    }
-    FrequencyReal = FrequencyRaw / 10000;
-
-    RPM = FrequencyRaw / PulsesPerRevolution * 60;
-    RPM = RPM / 10000;
-    total = total - readings[readIndex];
-    readings[readIndex] = RPM;
-    total = total + readings[readIndex];
-    readIndex = readIndex + 1;
-
-    if (readIndex >= numReadings)
-    {
-      readIndex = 0;
-    }
-    average = total / numReadings;
-  }
-  void Pulse_Event()
-  {
-    PeriodBetweenPulses = micros() - LastTimeWeMeasured;
-    LastTimeWeMeasured = micros();
-
-    if (PulseCounter >= AmountOfReadings)
-    {
-      PeriodAverage = PeriodSum / AmountOfReadings;
-      PulseCounter = 1;
-      PeriodSum = PeriodBetweenPulses;
-
-      int RemapedAmountOfReadings = map(PeriodBetweenPulses, 40000, 5000, 1, 10);
-      RemapedAmountOfReadings = constrain(RemapedAmountOfReadings, 1, 10);
-      AmountOfReadings = RemapedAmountOfReadings;
-    }
-    else
-    {
-      PulseCounter++;
-      PeriodSum = PeriodSum + PeriodBetweenPulses;
-    }
-  }
-  void Loop()
-  {
-    updateVelocityAverage();
-    int photoCell = analogRead(PIN_A1);
-    Serial.println(photoCell);
-    int lightThreshold = 120;
-    if (photoCell > lightThreshold)
-    {
-      pod.leds[1].Set(1, 1, 1);
-      if (pulse == 0)
-      {
-        // phaseTime1 = micros();
-        // rotationDirCount++;
-        pulse = 1;
-        Pulse_Event();
-      }
-    }
-    else
-    {
-      pod.leds[1].Set(0, 0, 0);
-      pulse = 0;
-    }
-  }
-};
-
-AbcsRod::AbcsRod(uint8_t index)
-{
-  tcaIndex = index;
-}
-
-void AbcsRod::Init()
-{
-  pinMode(16, INPUT);
-  Wire.begin();
-  vl1.begin();
-}
-
-AbcsRod::~AbcsRod() {}
-
-float AbcsRod::GetDistance()
-{
-  // tcaselect(tcaIndex);
-  /* Todo: readStatus? */
-  Wire.beginTransmission(TCAADDR);
-  Wire.write(1 << tcaIndex);
-  Wire.endTransmission();
-  if (!vl.readRangeStatus())
-  {
-    uint8_t range = vl.readRange();
-  }
-  // float normal = range / 255.0;
-  return 1.0;
-}
-
-/* =============================== */
-
-AbcsRod rod0 = AbcsRod(0);
+AbcsRod abcsRods[NUM_RODS] = {
+    AbcsRod(0, PIN_A1),
+    AbcsRod(1, PIN_A2)};
 
 void ConditionalParameter(float oldVal, float newVal, float &param, float update);
 
@@ -208,19 +59,22 @@ void Controls();
 
 void NextSamples(float &sig)
 {
-  // float ad_out = ad.Process();
-  float sig1 = synthVoice1.Process();
-  float sig2 = synthVoice2.Process();
-  float sig3 = synthVoice3.Process();
+  float result = 0.0;
+  for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+  {
+    float oscSig = synthVoices[i].Process() / float(NUM_SYNTHVOICES);
+    result += oscSig;
+  }
 
-  // sig = sig1 / 1.f;
-  sig = sig1 / 3.f + sig2 / 3.f + sig3 / 3.f;
+  sig = result;
+
   /* Envelope */
   // sig *= ad_out;
 }
 
 void MyCallback(float **in, float **out, size_t size)
 {
+  // photoCellCtrl.Process();
   Controls();
 
   for (size_t i = 0; i < size; i++)
@@ -236,32 +90,39 @@ void MyCallback(float **in, float **out, size_t size)
 void setup()
 {
   float sample_rate, callback_rate;
-
   Serial.begin(115200);
-  // while (!Serial)
-  // {
-  //   delay(1);
-  // }
 
   Wire.begin();
 
   // Initialize distance sensors
   tcaselect(0);
-
   if (!vl1.begin())
   {
-    // Serial.print("Could not find vl1 distance sensor");
+    Serial.println("Could not find vl1 distance sensor");
   }
-
-  rod0.Init();
+  tcaselect(1);
+  if (!vl1.begin())
+  {
+    Serial.println("Could not find vl1 distance sensor");
+  }
 
   pod = DAISY.init(DAISY_POD, AUDIO_SR_48K);
   sample_rate = DAISY.get_samplerate();
   callback_rate = DAISY.get_callbackrate();
 
+  // photoCellCtrl.Init(PIN_A1, callback_rate);
+
+  for (size_t i = 0; i < NUM_RODS; i++)
+  {
+    abcsRods[i].Init(callback_rate);
+  }
+
+  // rod0.Init(callback_rate);
+  // rod1.Init(callback_rate);
+
   // Set global variables
-  oldk1 = oldk2 = 0;
-  k1 = k2 = 0;
+  oldk1 = oldk2 = oldk3 = 0;
+  k1 = k2 = k3 = 0;
 
   noteVal = 40;
   attack = .01f;
@@ -272,20 +133,14 @@ void setup()
 
   float fq = mtof(noteVal);
 
-  synthVoice1.Init(sample_rate);
-  synthVoice1.SetOscWaveform(waveforms[2]);
-  synthVoice1.SetOscFreq(fq);
-  synthVoice1.SetLfoFreq(2.0);
-
-  synthVoice2.Init(sample_rate);
-  synthVoice2.SetOscWaveform(waveforms[3]);
-  synthVoice2.SetOscFreq(fq * 2.0);
-  synthVoice2.SetLfoFreq(2.0);
-
-  synthVoice3.Init(sample_rate);
-  synthVoice3.SetOscWaveform(waveforms[1]);
-  synthVoice3.SetOscFreq(fq * 3.0);
-  synthVoice3.SetLfoFreq(2.0);
+  for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+  {
+    synthVoices[i].Init(sample_rate);
+    synthVoices[i].SetOscWaveform(waveforms[0]);
+    synthVoices[i].SetOscFreq(fq * (float(i) + 1.f));
+    synthVoices[i].SetLfoFreq(0.0);
+    synthVoices[i].SetLfoDepth(0.0);
+  }
 
   // Init everything
   ad.Init(sample_rate);
@@ -303,6 +158,8 @@ void setup()
   lfoFreqParam.Init(pod.controls[1], 0.25, 10, lfoFreqParam.LINEAR);
   lfoDepthCtrlParam.Init(pod.controls[1], 0., 1., lfoDepthCtrlParam.LINEAR);
 
+  // photoCellParam.Init(photoCellCtrl, 0, 1024, photoCellParam.LINEAR);
+
   // start the audio callback
   DAISY.begin(MyCallback);
 }
@@ -316,21 +173,46 @@ void tcaselect(uint8_t i)
   Wire.endTransmission();
 }
 
+float rotationSpeed;
+float depth;
+int pulse;
+
+int count = 0;
+
+float filterValOld = 10000.0;
+float filterValOld2 = 10000.0;
+float filterVal = filterValOld;
+uint8_t range1;
+uint8_t range2;
+
+float rangeToFilterFreq(int range)
+{
+  float exp = range * 11 / 128.0 + 5;
+  exp = constrain(exp, 5, 14);
+  return pow(2, exp);
+}
+
 void loop()
 {
-  rod0.Loop();
-  tcaselect(0);
+  /* range is pretty slow to read, only check every 100 cycles */
+  if (count % 100 == 0)
+  {
+    tcaselect(0);
+    range1 = vl1.readRange();
+    tcaselect(1);
+    range2 = vl1.readRange();
+  }
+  /* filter 1 */
+  filterVal = rangeToFilterFreq(range1) * 0.1 + filterValOld * 0.9;
+  filterValOld = filterVal;
+  synthVoices[0].SetFilterCutoff(filterVal);
 
-  // float dist = rod0.GetDistance();
-  float rotationSpeed = rod0.GetRotationSpeed();
+  /* filter 2 */
+  filterVal = rangeToFilterFreq(range2) * 0.1 + filterValOld2 * 0.9;
+  filterValOld2 = filterVal;
+  synthVoices[1].SetFilterCutoff(filterVal);
 
-  Serial.println(rotationSpeed);
-  uint8_t range1 = vl1.readRange();
-  float filterVal = map(range1, 0, 255, 0.0, 10000.0);
-  synthVoice1.SetLfoFreq(rotationSpeed);
-  float depth = rotationSpeed * 0.5;
-  synthVoice1.SetLfoDepth(fclamp(depth, 0.f, 1.f));
-  synthVoice1.SetFilterCutoff(filterVal);
+  count++;
 }
 
 // Updates values if knob had changed
@@ -346,13 +228,32 @@ void Controls()
 {
   pod.ProcessAllControls();
 
+  for (size_t i = 0; i < NUM_RODS; i++)
+  {
+    /* Get spin speed */
+    abcsRods[i].Process();
+    rotationSpeed = abcsRods[i].GetRotationSpeed();
+    depth = fclamp(rotationSpeed * 0.5, 0.f, 1.f);
+
+    /* Set LFOs */
+    synthVoices[i].SetLfoFreq(rotationSpeed);
+  }
+
+  int pulse = abcsRods[activeVoice].GetPulse();
+  pod.leds[1].Set(pulse, pulse, pulse);
+
   /* Encoder */
+  activeVoice += pod.encoder.RisingEdge();
+  activeVoice = (activeVoice % NUM_SYNTHVOICES + NUM_SYNTHVOICES) % NUM_SYNTHVOICES;
+
+  /* Set voice frequencies */
   noteVal += pod.encoder.Increment();
   float fq = mtof(noteVal);
 
-  synthVoice1.SetOscFreq(fq);
-  synthVoice2.SetOscFreq(fq * 2.f);
-  synthVoice3.SetOscFreq(fq * 3.f);
+  for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+  {
+    synthVoices[i].SetOscFreq(fq * (float(i) + 1.f));
+  }
 
   /* Knobs */
   k1 = pod.controls[0].Value();
@@ -362,10 +263,6 @@ void Controls()
   ConditionalParameter(oldk2, k2, lfoFreqCtrl, lfoFreqParam.Process());
   ConditionalParameter(oldk2, k2, lfoDepthCtrl, lfoDepthCtrlParam.Process());
 
-  // synthVoice1.SetFilterCutoff(cutoff);
-  // synthVoice1.SetLfoFreq(lfoFreqCtrl);
-  // synthVoice1.SetLfoDepth(lfoDepthCtrl);
-
   /* LEDs */
   pod.leds[0].Set((waveform == 2 || waveform == 3), (waveform == 1 || waveform == 3), (waveform == 0));
   // pod.leds[1].Set((oscLfoTarget == 0), (oscLfoTarget == 1), false);
@@ -373,12 +270,13 @@ void Controls()
   /* Buttons */
   waveform += pod.buttons[0].RisingEdge();
   waveform = (waveform % NUM_WAVEFORMS + NUM_WAVEFORMS) % NUM_WAVEFORMS;
-  synthVoice1.SetOscWaveform(waveforms[waveform]);
+  synthVoices[activeVoice].SetOscWaveform(waveforms[waveform]);
 
   oscLfoTarget += pod.buttons[1].RisingEdge();
   oscLfoTarget = (oscLfoTarget % 2 + 2) % 2;
-  synthVoice1.setLfoTarget(oscLfoTarget);
+  synthVoices[activeVoice].setLfoTarget(oscLfoTarget);
 
   oldk1 = k1;
   oldk2 = k2;
+  oldk3 = k3;
 }
