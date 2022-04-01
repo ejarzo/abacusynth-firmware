@@ -1,3 +1,4 @@
+
 /*
   "forcedInclude": [
       "/Users/eliasjarzombek/Library/Arduino15/packages/STMicroelectronics/hardware/stm32/2.2.0/cores/arduino/Arduino.h",
@@ -7,6 +8,8 @@
   ],
  */
 
+#include <Arduino.h>
+#include <MIDI.h>
 #include <Wire.h>
 #include "DaisyDuino.h"
 #include "Adafruit_VL6180X.h"
@@ -15,11 +18,26 @@
 #define NUM_WAVEFORMS 4
 #define NUM_SYNTHVOICES 2
 #define NUM_RODS 2
+#define NUM_LFO_TARGETS 2
+
+#define USING_DISTANCE_SENSORS true
+
+#define LONG_PRESS_THRESHOLD 800
+
+#define PIN_BREAKBEAM_IN_1 15
+#define PIN_BREAKBEAM_IN_2 16
+
+#define PIN_LED_OUT_1 17
+#define PIN_LED_OUT_2 18
 
 #include "./abcs-synth-voice2.h"
 #include "./abcs-rod.h"
 
 using namespace daisysp;
+
+MIDI_CREATE_DEFAULT_INSTANCE();
+
+DaisyHardware hw;
 
 uint8_t waveforms[NUM_WAVEFORMS] = {
     Oscillator::WAVE_SIN,
@@ -29,7 +47,6 @@ uint8_t waveforms[NUM_WAVEFORMS] = {
 };
 
 static AdEnv ad;
-static Parameter cutoffParam, lfoFreqParam, lfoDepthCtrlParam, photoCellParam;
 static int waveform;
 
 int noteVal, wave, oscLfoTarget;
@@ -40,22 +57,69 @@ float oldk1, oldk2, oldk3, k1, k2, k3;
 int activeVoice = 0;
 
 Adafruit_VL6180X vl1 = Adafruit_VL6180X();
-DaisyHardware pod;
-
-// AnalogControl photoCellCtrl;
 
 AbcsSynthVoice2 synthVoices[NUM_SYNTHVOICES];
 
-// AbcsRod rod0 = AbcsRod(0, PIN_A1);
-// AbcsRod rod1 = AbcsRod(1, PIN_A2);
-
 AbcsRod abcsRods[NUM_RODS] = {
-    AbcsRod(0, PIN_A1),
-    AbcsRod(1, PIN_A2)};
+    AbcsRod(0, PIN_BREAKBEAM_IN_1, 0, 1, 2),
+    AbcsRod(1, PIN_BREAKBEAM_IN_2, 3, 4, 5)};
 
-void ConditionalParameter(float oldVal, float newVal, float &param, float update);
+float rotationSpeed;
+int pulse;
+
+int count = 0;
+
+float filterVal1 = 15000.0;
+float filterVal2 = 15000.0;
+
+float filterValOld = filterVal1;
+float filterValOld2 = filterVal2;
+
+float filterVal = filterValOld;
+uint8_t range1;
+uint8_t range2;
+
+int harmonicVal1 = 1;
 
 void Controls();
+
+void tcaselect(uint8_t i)
+{
+  if (i > 7)
+    return;
+  Wire.beginTransmission(TCAADDR);
+  Wire.write(1 << i);
+  Wire.endTransmission();
+}
+
+void handleNoteOn(uint8_t inChannel, uint8_t inNote, uint8_t inVelocity)
+{
+  Serial.println("NOTE ON");
+  noteVal = inNote;
+  float fq = mtof(noteVal);
+
+  for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+  {
+    synthVoices[i].SetOscFreq(fq);
+  }
+}
+
+void handleNoteOff(uint8_t inChannel, uint8_t inNote, uint8_t inVelocity)
+{
+  Serial.print("MIDI OFF");
+  Serial.print(" ");
+  Serial.print(inChannel);
+  Serial.print(" ");
+  Serial.print(inNote);
+  Serial.print(" ");
+  Serial.print(inVelocity);
+  Serial.println();
+  // if (inVelocity > 0)
+  // {
+  //   noteVal = inNote;
+  // }
+  // voice_handler.OnNoteOff(inNote, inVelocity);
+}
 
 void NextSamples(float &sig)
 {
@@ -74,7 +138,6 @@ void NextSamples(float &sig)
 
 void MyCallback(float **in, float **out, size_t size)
 {
-  // photoCellCtrl.Process();
   Controls();
 
   for (size_t i = 0; i < size; i++)
@@ -90,61 +153,65 @@ void MyCallback(float **in, float **out, size_t size)
 void setup()
 {
   float sample_rate, callback_rate;
-  Serial.begin(115200);
+  delay(300);
 
   Wire.begin();
 
-  // Initialize distance sensors
-  tcaselect(0);
-  if (!vl1.begin())
+  if (USING_DISTANCE_SENSORS)
   {
-    Serial.println("Could not find vl1 distance sensor");
-  }
-  tcaselect(1);
-  if (!vl1.begin())
-  {
-    Serial.println("Could not find vl1 distance sensor");
+    // Initialize distance sensors
+    tcaselect(0);
+    if (!vl1.begin())
+    {
+      Serial.println("Could not find vl1 distance sensor");
+    }
+    tcaselect(1);
+    if (!vl1.begin())
+    {
+      Serial.println("Could not find vl1 distance sensor");
+    }
   }
 
-  pod = DAISY.init(DAISY_POD, AUDIO_SR_48K);
+  hw = DAISY.init(DAISY_SEED, AUDIO_SR_48K);
   sample_rate = DAISY.get_samplerate();
   callback_rate = DAISY.get_callbackrate();
 
-  // photoCellCtrl.Init(PIN_A1, callback_rate);
+  hw.numControls = 0;
+
+  pinMode(PIN_LED_OUT_1, OUTPUT);
+  pinMode(PIN_LED_OUT_2, OUTPUT);
+
+  // hw.controls[0].Init(A0, callback_rate);
+  // hw.controls[1].Init(A1, callback_rate);
+  // hw.controls[2].Init(A2, callback_rate);
+  // hw.controls[3].Init(A3, callback_rate);
 
   for (size_t i = 0; i < NUM_RODS; i++)
   {
     abcsRods[i].Init(callback_rate);
   }
 
-  // rod0.Init(callback_rate);
-  // rod1.Init(callback_rate);
-
-  // Set global variables
-  oldk1 = oldk2 = oldk3 = 0;
-  k1 = k2 = k3 = 0;
-
   noteVal = 40;
   attack = .01f;
   release = .2f;
   lfoFreqCtrl = 0.0f;
   lfoDepthCtrl = 0.0f;
-  oscLfoTarget = 1;
+  oscLfoTarget = 0;
+
+  waveform = waveforms[0];
 
   float fq = mtof(noteVal);
 
   for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
   {
     synthVoices[i].Init(sample_rate);
-    synthVoices[i].SetOscWaveform(waveforms[0]);
-    synthVoices[i].SetOscFreq(fq * (float(i) + 1.f));
-    synthVoices[i].SetLfoFreq(0.0);
-    synthVoices[i].SetLfoDepth(0.0);
+    synthVoices[i].SetOscWaveform(waveform);
+    synthVoices[i].SetOscFreq(fq);
+    synthVoices[i].SetHarmonic(i + 1);
   }
 
   // Init everything
   ad.Init(sample_rate);
-  waveform = waveforms[0];
 
   // Set envelope parameters
   ad.SetTime(ADENV_SEG_ATTACK, 0.01);
@@ -153,37 +220,15 @@ void setup()
   ad.SetMin(0);
   ad.SetCurve(0.5);
 
-  // set parameter parameters
-  cutoffParam.Init(pod.controls[0], 100, 20000, cutoffParam.LOGARITHMIC);
-  lfoFreqParam.Init(pod.controls[1], 0.25, 10, lfoFreqParam.LINEAR);
-  lfoDepthCtrlParam.Init(pod.controls[1], 0., 1., lfoDepthCtrlParam.LINEAR);
-
-  // photoCellParam.Init(photoCellCtrl, 0, 1024, photoCellParam.LINEAR);
-
   // start the audio callback
+
+  MIDI.setHandleNoteOn(handleNoteOn);
+  MIDI.setHandleNoteOff(handleNoteOff);
+  MIDI.turnThruOff();
+  MIDI.begin(MIDI_CHANNEL_OMNI); // Listen to all incoming messages
+
   DAISY.begin(MyCallback);
 }
-
-void tcaselect(uint8_t i)
-{
-  if (i > 7)
-    return;
-  Wire.beginTransmission(TCAADDR);
-  Wire.write(1 << i);
-  Wire.endTransmission();
-}
-
-float rotationSpeed;
-float depth;
-int pulse;
-
-int count = 0;
-
-float filterValOld = 10000.0;
-float filterValOld2 = 10000.0;
-float filterVal = filterValOld;
-uint8_t range1;
-uint8_t range2;
 
 float rangeToFilterFreq(int range)
 {
@@ -192,91 +237,79 @@ float rangeToFilterFreq(int range)
   return pow(2, exp);
 }
 
+float pressTime = 0.0;
+
 void loop()
 {
-  /* range is pretty slow to read, only check every 100 cycles */
-  if (count % 100 == 0)
-  {
-    tcaselect(0);
-    range1 = vl1.readRange();
-    tcaselect(1);
-    range2 = vl1.readRange();
-  }
-  /* filter 1 */
-  filterVal = rangeToFilterFreq(range1) * 0.1 + filterValOld * 0.9;
-  filterValOld = filterVal;
-  synthVoices[0].SetFilterCutoff(filterVal);
+  // Serial.println("loop");
+  MIDI.read();
 
-  /* filter 2 */
-  filterVal = rangeToFilterFreq(range2) * 0.1 + filterValOld2 * 0.9;
-  filterValOld2 = filterVal;
-  synthVoices[1].SetFilterCutoff(filterVal);
+  // for (size_t i = 0; i < 4; i++)
+  // {
+  //   Serial.print(hw.controls[i].Value());
+  //   Serial.print(" ");
+  // }
+  // // for (size_t i = 0; i < 4; i++)
+  // // {
+  // //   Serial.print(hw.AnalogReadToVolts(A0 + i));
+  // //   Serial.print(" ");
+  // // }
+  // Serial.println();
+
+  /* range is pretty slow to read, only check every 100 cycles */
+  if (USING_DISTANCE_SENSORS && count >= 80)
+  {
+    tcaselect(1);
+    range1 = vl1.readRange();
+    filterVal1 = rangeToFilterFreq(range1);
+    tcaselect(0);
+    range2 = vl1.readRange();
+    filterVal2 = rangeToFilterFreq(range2);
+
+    synthVoices[0].SetFilterCutoff(filterVal1);
+    synthVoices[1].SetFilterCutoff(filterVal2);
+
+    count = 0;
+  }
 
   count++;
 }
 
-// Updates values if knob had changed
-void ConditionalParameter(float oldVal, float newVal, float &param, float update)
-{
-  if (abs(oldVal - newVal) > 0.0005)
-  {
-    param = update;
-  }
-}
-
 void Controls()
 {
-  pod.ProcessAllControls();
+  // hw.ProcessAllControls();
 
   for (size_t i = 0; i < NUM_RODS; i++)
   {
     /* Get spin speed */
     abcsRods[i].Process();
+
     rotationSpeed = abcsRods[i].GetRotationSpeed();
-    depth = fclamp(rotationSpeed * 0.5, 0.f, 1.f);
+    harmonicVal1 = abcsRods[i].GetEncoderVal();
+    waveform = abcsRods[i].GetWaveformIndex();
 
-    /* Set LFOs */
+    synthVoices[i].SetHarmonic(harmonicVal1);
     synthVoices[i].SetLfoFreq(rotationSpeed);
+    synthVoices[i].SetOscWaveform(waveforms[waveform]);
+    if (abcsRods[i].GetLongPress())
+    {
+      synthVoices[i].IncrementLfoTarget();
+    }
   }
-
-  int pulse = abcsRods[activeVoice].GetPulse();
-  pod.leds[1].Set(pulse, pulse, pulse);
 
   /* Encoder */
-  activeVoice += pod.encoder.RisingEdge();
-  activeVoice = (activeVoice % NUM_SYNTHVOICES + NUM_SYNTHVOICES) % NUM_SYNTHVOICES;
 
   /* Set voice frequencies */
-  noteVal += pod.encoder.Increment();
-  float fq = mtof(noteVal);
+  // noteVal += hw.encoder.Increment();
+  // float fq = mtof(noteVal);
 
-  for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
-  {
-    synthVoices[i].SetOscFreq(fq * (float(i) + 1.f));
-  }
-
-  /* Knobs */
-  k1 = pod.controls[0].Value();
-  k2 = pod.controls[1].Value();
-
-  ConditionalParameter(oldk1, k1, cutoff, cutoffParam.Process());
-  ConditionalParameter(oldk2, k2, lfoFreqCtrl, lfoFreqParam.Process());
-  ConditionalParameter(oldk2, k2, lfoDepthCtrl, lfoDepthCtrlParam.Process());
+  // for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+  // {
+  //   synthVoices[i].SetOscFreq(fq);
+  // }
 
   /* LEDs */
-  pod.leds[0].Set((waveform == 2 || waveform == 3), (waveform == 1 || waveform == 3), (waveform == 0));
-  // pod.leds[1].Set((oscLfoTarget == 0), (oscLfoTarget == 1), false);
 
-  /* Buttons */
-  waveform += pod.buttons[0].RisingEdge();
-  waveform = (waveform % NUM_WAVEFORMS + NUM_WAVEFORMS) % NUM_WAVEFORMS;
-  synthVoices[activeVoice].SetOscWaveform(waveforms[waveform]);
-
-  oscLfoTarget += pod.buttons[1].RisingEdge();
-  oscLfoTarget = (oscLfoTarget % 2 + 2) % 2;
-  synthVoices[activeVoice].setLfoTarget(oscLfoTarget);
-
-  oldk1 = k1;
-  oldk2 = k2;
-  oldk3 = k3;
+  digitalWrite(PIN_LED_OUT_1, abcsRods[0].GetPulse());
+  digitalWrite(PIN_LED_OUT_2, abcsRods[1].GetPulse());
 }

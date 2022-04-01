@@ -6,13 +6,17 @@ class AbcsRod
 private:
   int tcaIndex;
   int photoCellPin;
-  Adafruit_VL6180X vl = Adafruit_VL6180X();
+  int pinEnc1;
+  int pinEnc2;
+  int pinEncBtn;
+  // Adafruit_VL6180X vl = Adafruit_VL6180X();
 
   const byte PulsesPerRevolution = 2;
   const unsigned long ZeroTimeout = 500000;
   const byte numReadings = 4;
 
-  AnalogControl photoCellCtrl;
+  Encoder rodEncoder;
+  Switch breakBeamSwitch;
 
   unsigned long LastTimeWeMeasured;
   unsigned long PeriodBetweenPulses = ZeroTimeout + 10;
@@ -33,7 +37,14 @@ private:
   unsigned int average;
   unsigned int photoCellVal;
 
-  float lightThreshold = 0.4;
+  int encoderVal = 0;
+  int waveformIndex = 0;
+
+  int prevLongPress = 0;
+  int longPress = 0;
+  int longPressRisingEdge = 0;
+
+  float lightThreshold = 0.14;
 
   int pulse = 0;
   int PERIOD = 1;
@@ -41,6 +52,7 @@ private:
   float k = 0.0;
   float oldk = 0.0;
 
+  bool canUpdateWaveform = false;
   void updateVelocityAverage()
   {
     LastTimeCycleMeasure = LastTimeWeMeasured;
@@ -97,74 +109,101 @@ private:
   }
 
 public:
-  AbcsRod(uint8_t index, int _photoCellPin)
+  AbcsRod(uint8_t index, int _photoCellPin, int _pinEnc1, int _pinEnc2, int _pinEncBtn)
   {
     tcaIndex = index;
+    encoderVal = index + 1;
     photoCellPin = _photoCellPin;
+    pinEnc1 = _pinEnc1;
+    pinEnc2 = _pinEnc2;
+    pinEncBtn = _pinEncBtn;
   };
   ~AbcsRod(){};
   void Init(float callback_rate)
   {
-    photoCellCtrl.Init(photoCellPin, callback_rate);
-
-    // pinMode(photoCellPin, INPUT);
+    rodEncoder.Init(callback_rate, pinEnc1, pinEnc2, pinEncBtn, INPUT_PULLUP, INPUT_PULLUP, INPUT_PULLDOWN);
+    breakBeamSwitch.Init(callback_rate, false, photoCellPin, INPUT_PULLUP);
     // Wire.begin();
-    vl.begin();
+    // vl.begin();
   };
   float GetDistance();
   float GetRotationSpeed()
   {
     return average / 60.0;
   };
+
   int GetPulse()
   {
-    return pulse;
+    return breakBeamSwitch.Pressed();
   };
+
+  int GetEncoderVal()
+  {
+    return encoderVal;
+  };
+
+  int GetWaveformIndex()
+  {
+    return waveformIndex;
+  };
+
+  void SetVal(float val)
+  {
+    k = val;
+  }
+
+  int GetLongPress()
+  {
+    return longPressRisingEdge;
+  }
+
+  float GetPressTime()
+  {
+    return rodEncoder.TimeHeldMs();
+  }
 
   void Process()
   {
-    photoCellCtrl.Process();
-    k = photoCellCtrl.Value();
-    updateVelocityAverage();
+    rodEncoder.Debounce();
+    breakBeamSwitch.Debounce();
 
-    // Serial.println(photoCellVal);
-    if (k > 0)
+    if (rodEncoder.RisingEdge())
     {
-      if (k > lightThreshold)
-      {
-        if (pulse == 0)
-        {
-          pulse = 1;
-          Pulse_Event();
-        }
-      }
-      else
-      {
-        pulse = 0;
-      }
+      canUpdateWaveform = true;
     }
-  }
 
-  void Loop()
-  {
-    updateVelocityAverage();
-    // int photoCellVal = analogRead(photoCellPin);
-    // photoCellVal = 10;
-    // Serial.println(photoCellVal);
-    if (k > 0)
+    longPress = rodEncoder.TimeHeldMs() > LONG_PRESS_THRESHOLD;
+
+    if (!prevLongPress && longPress)
     {
-      if (k > lightThreshold)
-      {
-        if (pulse == 0)
-        {
-          pulse = 1;
-          Pulse_Event();
-        }
-      }
-      else
-      {
-        pulse = 0;
-      }
+      longPressRisingEdge = true;
+    }
+    else
+    {
+      longPressRisingEdge = false;
+    }
+
+    if (longPress)
+    {
+      canUpdateWaveform = false;
+    }
+    // Serial.println(prevLongPress);
+    if (canUpdateWaveform)
+    {
+      waveformIndex += rodEncoder.FallingEdge();
+      waveformIndex = (waveformIndex % NUM_WAVEFORMS + NUM_WAVEFORMS) % NUM_WAVEFORMS;
+    }
+
+    prevLongPress = longPress;
+
+    encoderVal += rodEncoder.Increment();
+    encoderVal = (encoderVal % 10 + 10) % 10;
+
+    updateVelocityAverage();
+
+    if (breakBeamSwitch.RisingEdge())
+    {
+      Pulse_Event();
     }
   }
 };
