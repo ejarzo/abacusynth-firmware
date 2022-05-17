@@ -1,14 +1,13 @@
 // #include "Adafruit_VL6180X.h"
 
 class AbcsRod
-
 {
 private:
   int tcaIndex;
-  int photoCellPin;
-  int pinEnc1;
-  int pinEnc2;
-  int pinEncBtn;
+  int pinBreakBeam_;
+  int pinEnc1_;
+  int pinEnc2_;
+  int pinEncBtn_;
   // Adafruit_VL6180X vl = Adafruit_VL6180X();
 
   const byte PulsesPerRevolution = 2;
@@ -109,20 +108,20 @@ private:
   }
 
 public:
-  AbcsRod(uint8_t index, int _photoCellPin, int _pinEnc1, int _pinEnc2, int _pinEncBtn)
+  AbcsRod(uint8_t index, int pinBreakBeam, int pinEnc1, int pinEnc2, int pinEncBtn)
   {
     tcaIndex = index;
     encoderVal = index + 1;
-    photoCellPin = _photoCellPin;
-    pinEnc1 = _pinEnc1;
-    pinEnc2 = _pinEnc2;
-    pinEncBtn = _pinEncBtn;
+    pinBreakBeam_ = pinBreakBeam;
+    pinEnc1_ = pinEnc1;
+    pinEnc2_ = pinEnc2;
+    pinEncBtn_ = pinEncBtn;
   };
   ~AbcsRod(){};
   void Init(float callback_rate)
   {
-    rodEncoder.Init(callback_rate, pinEnc1, pinEnc2, pinEncBtn, INPUT_PULLUP, INPUT_PULLUP, INPUT_PULLDOWN);
-    breakBeamSwitch.Init(callback_rate, false, photoCellPin, INPUT_PULLUP);
+    rodEncoder.Init(callback_rate, pinEnc1_, pinEnc2_, pinEncBtn_, INPUT_PULLUP, INPUT_PULLUP, INPUT_PULLUP);
+    breakBeamSwitch.Init(callback_rate, false, pinBreakBeam_, INPUT_PULLUP);
     // Wire.begin();
     // vl.begin();
   };
@@ -196,7 +195,7 @@ public:
 
     prevLongPress = longPress;
 
-    encoderVal += rodEncoder.Increment();
+    encoderVal -= rodEncoder.Increment();
     encoderVal = (encoderVal % 10 + 10) % 10;
 
     updateVelocityAverage();

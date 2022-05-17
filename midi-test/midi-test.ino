@@ -152,18 +152,18 @@ private:
   }
 };
 
-static VoiceManager<3> voice_handler;
+static VoiceManager<2> voice_handler;
 
 void AudioCallback(float *in, float *out, size_t size)
 {
   float sum = 0.f;
-  hw.ProcessDigitalControls();
-  hw.ProcessAnalogControls();
-  if (hw.buttons[0].FallingEdge())
-  {
-    voice_handler.FreeAllVoices();
-  }
-  voice_handler.SetCutoff(250.f + hw.GetKnobValue(0) * 8000.f);
+  // hw.ProcessDigitalControls();
+  // hw.ProcessAnalogControls();
+  // if (hw.buttons[0].FallingEdge())
+  // {
+  //   voice_handler.FreeAllVoices();
+  // }
+  // voice_handler.SetCutoff(250.f + hw.GetKnobValue(0) * 8000.f);
 
   for (size_t i = 0; i < size; i += 2)
   {

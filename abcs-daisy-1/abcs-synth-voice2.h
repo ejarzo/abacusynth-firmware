@@ -1,13 +1,26 @@
 #include "DaisyDuino.h"
 
+float rangeToFilterFreq(int range)
+{
+  float exp = range * 11 / 128.0 + 5;
+  exp = constrain(exp, 5, 14);
+  return pow(2, exp);
+}
+
 class AbcsSynthVoice2
 {
 private:
   Oscillator osc;
-  MoogLadder flt;
+  Oscillator osc2;
+  Oscillator osc3;
+  // Svf flt;
+  Tone flt;
+
+  Line gainLine;
 
   float modsig2;
   float oscFreq;
+  float realFreq;
   float lfoFreq;
   float lfoDepth;
   float prevDepth;
@@ -17,11 +30,25 @@ private:
   float prevFilterCutoff;
   float harmonicMultiplier;
 
+  float vibratoDepth;
+  float gain;
+  uint8_t gainLineFinished;
+
   /*
     efficient LFO: https://www.earlevel.com/main/2003/03/02/the-digital-state-variable-filter/
   */
   float sinZ = 0.0;
   float cosZ = 1.0;
+
+  void SetOscFreq()
+  {
+    realFreq = oscFreq * harmonicMultiplier;
+    float realFreq2 = mtof(50) * harmonicMultiplier;
+    float realFreq3 = mtof(57) * harmonicMultiplier;
+    osc.SetFreq(realFreq);
+    // osc2.SetFreq(realFreq2);
+    // osc3.SetFreq(realFreq3);
+  }
 
 public:
   AbcsSynthVoice2(){};
@@ -30,10 +57,15 @@ public:
   void Init(float sample_rate)
   {
     osc.Init(sample_rate);
+    // osc2.Init(sample_rate);
+    // osc3.Init(sample_rate);
     flt.Init(sample_rate);
+    gainLine.Init(sample_rate);
 
+    gain = 1.0f;
     modsig2 = 0.0f;
     oscFreq = 0.0f;
+    realFreq = 0.0f;
     lfoFreq = 0.0f;
     lfoDepth = 0.0f;
     prevDepth = 0.0f;
@@ -41,38 +73,60 @@ public:
     prevFilterCutoff = 15000;
     harmonicMultiplier = 1.f;
 
-    osc.SetAmp(1.0f);
+    vibratoDepth = lfoDepth * (realFreq * 0.05);
 
-    flt.SetFreq(10000);
-    flt.SetRes(0.2);
+    osc.SetAmp(1.0f);
+    // osc2.SetAmp(1.0f);
+    // osc3.SetAmp(1.0f);
+
+    flt.SetFreq(filterCutoff);
+    // flt.SetRes(0.3f);
 
     SetLfoTarget(1);
   }
 
-  float Process()
+  void Loop()
   {
-    float f = lfoFreq / 10000.0;
+    /* TODO: confirm working */
     filterCutoff = filterCutoff * 0.08 + prevFilterCutoff * 0.92;
+    // filterCutoff = filterCutoff * 0.999999;
     flt.SetFreq(filterCutoff);
     prevFilterCutoff = filterCutoff;
+  }
+
+  float Process()
+  {
+
+    gain = gainLine.Process(&gainLineFinished);
+
+    // float f = lfoFreq / 10000.0;
+
+    /* TODO: maybe not needed in process? */
+    // filterCutoff = filterCutoff * 0.08 + prevFilterCutoff * 0.92;
+    // flt.SetFreq(filterCutoff);
+    // prevFilterCutoff = filterCutoff;
 
     // iterate oscillator
-    sinZ = sinZ + f * cosZ;
-    cosZ = cosZ - f * sinZ;
-    float realFreq = oscFreq * harmonicMultiplier;
+    sinZ = sinZ + lfoFreq * cosZ;
+    cosZ = cosZ - lfoFreq * sinZ;
+    // float realFreq = oscFreq * harmonicMultiplier;
 
     /* Vibrato */
     if (lfoTarget == 0)
     {
       modsig2 = lfoDepth * (realFreq * 0.05) * sinZ / 2;
       osc.SetFreq(realFreq + modsig2);
-    }
-    else
-    {
-      osc.SetFreq(realFreq);
+      // modsig2 = 10 * sinZ;
+      // osc.SetFreq(realFreq);
+      // osc2.SetFreq(220 + modsig2);
+      // osc3.SetFreq(110 + modsig2);
     }
 
     float sig = osc.Process();
+    // float sig2 = osc2.Process();
+    // float sig3 = osc3.Process();
+
+    // float sum = (sig + sig2 + sig3) / 3;
 
     /* Tremolo */
     if (lfoTarget == 1)
@@ -81,18 +135,10 @@ public:
       sig = sig * (1 - lfoDepth) + (sig * modsig2) * lfoDepth;
     }
 
-    if (waveform == Oscillator::WAVE_POLYBLEP_SAW)
-    {
-      sig *= 0.7;
-    }
-
-    if (waveform == Oscillator::WAVE_POLYBLEP_SQUARE)
-    {
-      sig *= 0.8;
-    }
-
-    sig = flt.Process(sig);
-    return sig;
+    float sigOut = flt.Process(sig);
+    // fonepole(currentDelay, delayTarget, .0002f);
+    // fonepole(12000f, sig, 0.05f);
+    return sigOut * gain;
   }
 
   void SetLfoTarget(int target)
@@ -110,19 +156,35 @@ public:
   void SetHarmonic(int harmonic)
   {
     harmonicMultiplier = float(constrain(harmonic, 1, 10));
+    SetOscFreq();
   }
 
   void SetOscWaveform(uint8_t wf)
   {
     waveform = wf;
     osc.SetWaveform(waveform);
+
+    // adjust volumes
+    if (waveform == Oscillator::WAVE_POLYBLEP_SAW)
+    {
+      osc.SetAmp(0.7F);
+    }
+
+    if (waveform == Oscillator::WAVE_POLYBLEP_SQUARE)
+    {
+      osc.SetAmp(0.8F);
+    }
   }
 
-  void SetOscFreq(float freq) { oscFreq = freq; }
+  void SetFundamentalFreq(float freq)
+  {
+    oscFreq = freq;
+    SetOscFreq();
+  }
 
   void SetLfoFreq(float freq)
   {
-    lfoFreq = freq;
+    lfoFreq = freq / 10000.0;
     /* Auto set depth based on freq */
     SetLfoDepth(fclamp(freq / 4, 0.f, 1.f));
   }
@@ -131,13 +193,33 @@ public:
   {
     lfoDepth = depth * 0.05 + prevDepth * 0.95;
     prevDepth = lfoDepth;
+    vibratoDepth = lfoDepth * (realFreq * 0.05);
   }
 
   void SetFilterCutoff(float freq)
   {
     filterCutoff = freq;
-    // flt.SetFreq(freq);
+    flt.SetFreq(freq);
+  }
+
+  void SetRange(int range)
+  {
+    /* Filter sawtooth and square waves */
+    if (waveform == Oscillator::WAVE_POLYBLEP_SAW || waveform == Oscillator::WAVE_POLYBLEP_SQUARE)
+    {
+      float freq = rangeToFilterFreq(range);
+      SetGain(1);
+      SetFilterCutoff(freq);
+    }
+
+    /* Set gain for sine and triangle */
+    else
+    {
+      SetFilterCutoff(15000);
+      SetGain(range / 130.f);
+    }
   }
 
   void SetAmp(float amp) { osc.SetAmp(amp); }
+  void SetGain(float targetGain) { gainLine.Start(gain, fclamp(targetGain, 0, 1), 0.2); }
 };

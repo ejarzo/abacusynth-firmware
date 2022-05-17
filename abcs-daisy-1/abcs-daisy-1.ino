@@ -16,28 +16,56 @@
 
 #define TCAADDR 0x70
 #define NUM_WAVEFORMS 4
-#define NUM_SYNTHVOICES 2
-#define NUM_RODS 2
+#define NUM_SYNTHVOICES 4
+#define NUM_RODS 4
 #define NUM_LFO_TARGETS 2
 
+#define USING_GAIN_POT true
 #define USING_DISTANCE_SENSORS true
 
-#define LONG_PRESS_THRESHOLD 800
+#define LONG_PRESS_THRESHOLD 700
 
 #define PIN_BREAKBEAM_IN_1 15
 #define PIN_BREAKBEAM_IN_2 16
+#define PIN_BREAKBEAM_IN_3 17
+#define PIN_BREAKBEAM_IN_4 18
 
-#define PIN_LED_OUT_1 17
-#define PIN_LED_OUT_2 18
+#define PIN_POT_GAIN A4
+
+#define TCA_IDX_1 0
+#define TCA_IDX_2 1
+#define TCA_IDX_3 3
+#define TCA_IDX_4 2
+
+#define PIN_ENC_1_A 3
+#define PIN_ENC_1_B 4
+#define PIN_ENC_1_BTN 5
+
+#define PIN_ENC_2_A 6
+#define PIN_ENC_2_B 7
+#define PIN_ENC_2_BTN 8
+
+#define PIN_ENC_3_A 25
+#define PIN_ENC_3_B 26
+#define PIN_ENC_3_BTN 27
+
+#define PIN_ENC_4_A 0
+#define PIN_ENC_4_B 1
+#define PIN_ENC_4_BTN 2
+
+#define OUTPUT_GAIN 0.4
+
+#define PIN_LED_OUT_1 19
+#define PIN_LED_OUT_2 20
 
 #include "./abcs-synth-voice2.h"
 #include "./abcs-rod.h"
 
+/* ======================================================== */
+
 using namespace daisysp;
 
 MIDI_CREATE_DEFAULT_INSTANCE();
-
-DaisyHardware hw;
 
 uint8_t waveforms[NUM_WAVEFORMS] = {
     Oscillator::WAVE_SIN,
@@ -46,40 +74,31 @@ uint8_t waveforms[NUM_WAVEFORMS] = {
     Oscillator::WAVE_POLYBLEP_SQUARE,
 };
 
-static AdEnv ad;
-static int waveform;
+DaisyHardware hw;
 
-int noteVal, wave, oscLfoTarget;
-float oscFreq, cutoff, lfoFreqCtrl, lfoDepthCtrl;
-float attack, release;
-float oldk1, oldk2, oldk3, k1, k2, k3;
-
-int activeVoice = 0;
+AnalogControl gainPot;
 
 Adafruit_VL6180X vl1 = Adafruit_VL6180X();
 
+AbcsRod abcsRods[NUM_RODS] = {
+    AbcsRod(0, PIN_BREAKBEAM_IN_1, PIN_ENC_1_A, PIN_ENC_1_B, PIN_ENC_1_BTN),
+    AbcsRod(1, PIN_BREAKBEAM_IN_2, PIN_ENC_2_A, PIN_ENC_2_B, PIN_ENC_2_BTN),
+    AbcsRod(2, PIN_BREAKBEAM_IN_3, PIN_ENC_3_A, PIN_ENC_3_B, PIN_ENC_3_BTN),
+    AbcsRod(3, PIN_BREAKBEAM_IN_4, PIN_ENC_4_A, PIN_ENC_4_B, PIN_ENC_4_BTN)};
+
 AbcsSynthVoice2 synthVoices[NUM_SYNTHVOICES];
 
-AbcsRod abcsRods[NUM_RODS] = {
-    AbcsRod(0, PIN_BREAKBEAM_IN_1, 0, 1, 2),
-    AbcsRod(1, PIN_BREAKBEAM_IN_2, 3, 4, 5)};
+static AdEnv ad;
+static int waveform;
 
-float rotationSpeed;
-int pulse;
+int noteVal;
+float attack, release;
+int loopCount = 0;
+uint8_t range1, range2, range3, range4;
 
-int count = 0;
+float gain = 1.f;
 
-float filterVal1 = 15000.0;
-float filterVal2 = 15000.0;
-
-float filterValOld = filterVal1;
-float filterValOld2 = filterVal2;
-
-float filterVal = filterValOld;
-uint8_t range1;
-uint8_t range2;
-
-int harmonicVal1 = 1;
+/* ======================================================== */
 
 void Controls();
 
@@ -92,15 +111,20 @@ void tcaselect(uint8_t i)
   Wire.endTransmission();
 }
 
+int harmonicTest = 1;
+
 void handleNoteOn(uint8_t inChannel, uint8_t inNote, uint8_t inVelocity)
 {
+  // harmonicTest++;
+  // synthVoices[0].SetHarmonic(harmonicTest);
+  // return;
   Serial.println("NOTE ON");
   noteVal = inNote;
   float fq = mtof(noteVal);
 
   for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
   {
-    synthVoices[i].SetOscFreq(fq);
+    synthVoices[i].SetFundamentalFreq(fq);
   }
 }
 
@@ -130,20 +154,23 @@ void NextSamples(float &sig)
     result += oscSig;
   }
 
-  sig = result;
-
   /* Envelope */
   // sig *= ad_out;
+
+  sig = result;
 }
 
 void MyCallback(float **in, float **out, size_t size)
 {
+  MIDI.read();
+
   Controls();
 
   for (size_t i = 0; i < size; i++)
   {
     float sig;
     NextSamples(sig);
+    sig = sig * gain;
 
     out[0][i] = sig;
     out[1][i] = sig;
@@ -153,7 +180,9 @@ void MyCallback(float **in, float **out, size_t size)
 void setup()
 {
   float sample_rate, callback_rate;
-  delay(300);
+  // Serial.begin();
+  delay(500);
+  Serial.println("SETUP");
 
   Wire.begin();
 
@@ -165,26 +194,35 @@ void setup()
     {
       Serial.println("Could not find vl1 distance sensor");
     }
+    delay(10);
     tcaselect(1);
     if (!vl1.begin())
     {
       Serial.println("Could not find vl1 distance sensor");
     }
+    delay(10);
+    tcaselect(2);
+    if (!vl1.begin())
+    {
+      Serial.println("Could not find vl1 distance sensor");
+    }
+    delay(10);
+    tcaselect(3);
+    if (!vl1.begin())
+    {
+      Serial.println("Could not find vl1 distance sensor");
+    }
+    delay(10);
   }
 
   hw = DAISY.init(DAISY_SEED, AUDIO_SR_48K);
   sample_rate = DAISY.get_samplerate();
   callback_rate = DAISY.get_callbackrate();
 
-  hw.numControls = 0;
-
   pinMode(PIN_LED_OUT_1, OUTPUT);
   pinMode(PIN_LED_OUT_2, OUTPUT);
 
-  // hw.controls[0].Init(A0, callback_rate);
-  // hw.controls[1].Init(A1, callback_rate);
-  // hw.controls[2].Init(A2, callback_rate);
-  // hw.controls[3].Init(A3, callback_rate);
+  gainPot.Init(PIN_POT_GAIN, callback_rate, true);
 
   for (size_t i = 0; i < NUM_RODS; i++)
   {
@@ -194,9 +232,6 @@ void setup()
   noteVal = 40;
   attack = .01f;
   release = .2f;
-  lfoFreqCtrl = 0.0f;
-  lfoDepthCtrl = 0.0f;
-  oscLfoTarget = 0;
 
   waveform = waveforms[0];
 
@@ -205,8 +240,8 @@ void setup()
   for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
   {
     synthVoices[i].Init(sample_rate);
-    synthVoices[i].SetOscWaveform(waveform);
-    synthVoices[i].SetOscFreq(fq);
+    synthVoices[i].SetOscWaveform(waveforms[4 - i]);
+    synthVoices[i].SetFundamentalFreq(fq);
     synthVoices[i].SetHarmonic(i + 1);
   }
 
@@ -230,53 +265,81 @@ void setup()
   DAISY.begin(MyCallback);
 }
 
-float rangeToFilterFreq(int range)
-{
-  float exp = range * 11 / 128.0 + 5;
-  exp = constrain(exp, 5, 14);
-  return pow(2, exp);
-}
-
 float pressTime = 0.0;
+
+float f1 = 0;
+float f2 = 0;
+float f3 = 0;
+float f4 = 0;
+int vlIndex = 0;
 
 void loop()
 {
-  // Serial.println("loop");
-  MIDI.read();
-
-  // for (size_t i = 0; i < 4; i++)
-  // {
-  //   Serial.print(hw.controls[i].Value());
-  //   Serial.print(" ");
-  // }
-  // // for (size_t i = 0; i < 4; i++)
-  // // {
-  // //   Serial.print(hw.AnalogReadToVolts(A0 + i));
-  // //   Serial.print(" ");
-  // // }
-  // Serial.println();
-
-  /* range is pretty slow to read, only check every 100 cycles */
-  if (USING_DISTANCE_SENSORS && count >= 80)
+  if (USING_GAIN_POT)
   {
-    tcaselect(1);
-    range1 = vl1.readRange();
-    filterVal1 = rangeToFilterFreq(range1);
-    tcaselect(0);
-    range2 = vl1.readRange();
-    filterVal2 = rangeToFilterFreq(range2);
-
-    synthVoices[0].SetFilterCutoff(filterVal1);
-    synthVoices[1].SetFilterCutoff(filterVal2);
-
-    count = 0;
+    gainPot.Process();
+    gain = gainPot.Value();
   }
 
-  count++;
+  Serial.print("gain: ");
+  Serial.println(gain);
+
+  /* range is pretty slow to read, only check every 100 cycles */
+  if (USING_DISTANCE_SENSORS && loopCount >= 100)
+  {
+    tcaselect(TCA_IDX_1);
+    range1 = vl1.readRange();
+    tcaselect(TCA_IDX_2);
+    range2 = vl1.readRange();
+    tcaselect(TCA_IDX_3);
+    range3 = vl1.readRange();
+    tcaselect(TCA_IDX_4);
+    range4 = vl1.readRange();
+
+    // Serial.print(range1);
+    // Serial.print(" ");
+    // Serial.print(range2);
+    // Serial.print(" ");
+    // Serial.print(range3);
+    // Serial.print(" ");
+    // Serial.print(range4);
+    // Serial.println();
+
+    // f1 = rangeToFilterFreq(range1);
+    // f2 = rangeToFilterFreq(range2);
+    // f3 = rangeToFilterFreq(range3);
+    // f4 = rangeToFilterFreq(range4);
+
+    synthVoices[0].SetRange(range1);
+    synthVoices[1].SetRange(range2);
+    synthVoices[2].SetRange(range3);
+    synthVoices[3].SetRange(range4);
+
+    loopCount = 0;
+  }
+
+  for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+  {
+    synthVoices[i].Loop();
+  }
+
+  // Serial.print(abcsRods[0].GetPulse());
+  // Serial.print(" ");
+  // Serial.print(abcsRods[1].GetPulse());
+  // Serial.print(" ");
+  // Serial.print(abcsRods[2].GetPulse());
+  // Serial.print(" ");
+  // Serial.print(abcsRods[3].GetPulse());
+  // Serial.println();
+
+  loopCount++;
 }
 
 void Controls()
 {
+  // hw.controls[4].Process();
+  // gainPot.Process();
+
   // hw.ProcessAllControls();
 
   for (size_t i = 0; i < NUM_RODS; i++)
@@ -284,13 +347,15 @@ void Controls()
     /* Get spin speed */
     abcsRods[i].Process();
 
-    rotationSpeed = abcsRods[i].GetRotationSpeed();
-    harmonicVal1 = abcsRods[i].GetEncoderVal();
-    waveform = abcsRods[i].GetWaveformIndex();
+    /* TODO: move to loop? */
+    float rotationSpeed = abcsRods[i].GetRotationSpeed();
+    int harmonic = abcsRods[i].GetEncoderVal();
+    int waveform = abcsRods[i].GetWaveformIndex();
 
-    synthVoices[i].SetHarmonic(harmonicVal1);
+    synthVoices[i].SetHarmonic(harmonic);
     synthVoices[i].SetLfoFreq(rotationSpeed);
     synthVoices[i].SetOscWaveform(waveforms[waveform]);
+    // synthVoices[i].SetOscWaveform(2 - i);
     if (abcsRods[i].GetLongPress())
     {
       synthVoices[i].IncrementLfoTarget();
@@ -305,7 +370,7 @@ void Controls()
 
   // for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
   // {
-  //   synthVoices[i].SetOscFreq(fq);
+  //   synthVoices[i].SetFundamentalFreq(fq);
   // }
 
   /* LEDs */
