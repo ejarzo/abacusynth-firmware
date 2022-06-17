@@ -8,6 +8,6 @@ Synthesizer code for the Abacusynth
 
 Abacuysnth is a synthesizer inspired by an abacus, the ancient counting tool used all around the world. Just like an abacus is used to learn the fundamentals of math, the Abacusynth can be used to explore the building blocks of audio synthesis.
 
-You can read more about the project [here](https://itp.eliasjarzombek.com/abacusynth-overview/).
+You can read more about the project [here](https://eliasjarzombek.com/abacusynth-hardware/) and find more detailed process documentation [here](https://itp.eliasjarzombek.com/tags/thesis).
 
 This repo contains code that runs on a [Daisy Seed](https://www.electro-smith.com/daisy/daisy) microcontroller. The code reads from analog and digital sensors and generates audio based on the movement and spinning motion of the colored triangles. The synth is also MIDI controllable.
