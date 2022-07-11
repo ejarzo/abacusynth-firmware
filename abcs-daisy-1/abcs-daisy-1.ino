@@ -1,13 +1,4 @@
 
-/*
-  "forcedInclude": [
-      "/Users/eliasjarzombek/Library/Arduino15/packages/STMicroelectronics/hardware/stm32/2.2.0/cores/arduino/Arduino.h",
-      "/Users/eliasjarzombek/Documents/Arduino/libraries/Adafruit_VL6180X/Adafruit_VL6180X.h",
-      "/Users/eliasjarzombek/Documents/Arduino/libraries/DaisyDuino/src/utility/DaisySP/daisysp.h",
-      "/Users/eliasjarzombek/Documents/Arduino/libraries/DaisyDuino/src/utility/DaisySP/modules/moogladder.h"
-  ],
- */
-
 #include <Arduino.h>
 #include <MIDI.h>
 #include <Wire.h>
@@ -97,6 +88,20 @@ int loopCount = 0;
 uint8_t range1, range2, range3, range4;
 
 float gain = 1.f;
+
+float pressTime = 0.0;
+
+float f1 = 0;
+float f2 = 0;
+float f3 = 0;
+float f4 = 0;
+int vlIndex = 0;
+
+float prevGain = gain;
+float newGain = 0.0;
+
+Line gainLine;
+uint8_t gainLineFinished;
 
 /* ======================================================== */
 
@@ -215,15 +220,20 @@ void setup()
     delay(10);
   }
 
+  /* Init Daisy */
   hw = DAISY.init(DAISY_SEED, AUDIO_SR_48K);
   sample_rate = DAISY.get_samplerate();
   callback_rate = DAISY.get_callbackrate();
 
-  pinMode(PIN_LED_OUT_1, OUTPUT);
-  pinMode(PIN_LED_OUT_2, OUTPUT);
+  /* For debugging */
+  // pinMode(PIN_LED_OUT_1, OUTPUT);
+  // pinMode(PIN_LED_OUT_2, OUTPUT);
 
+  /* Global Gain */
+  gainLine.Init(sample_rate);
   gainPot.Init(PIN_POT_GAIN, callback_rate, true);
 
+  /* Init Rods */
   for (size_t i = 0; i < NUM_RODS; i++)
   {
     abcsRods[i].Init(callback_rate);
@@ -265,24 +275,25 @@ void setup()
   DAISY.begin(MyCallback);
 }
 
-float pressTime = 0.0;
-
-float f1 = 0;
-float f2 = 0;
-float f3 = 0;
-float f4 = 0;
-int vlIndex = 0;
-
 void loop()
 {
   if (USING_GAIN_POT)
   {
     gainPot.Process();
-    gain = gainPot.Value();
-  }
+    newGain = gainPot.Value();
+    if (newGain < 0.06)
+    {
+      newGain = 0;
+    }
 
-  Serial.print("gain: ");
-  Serial.println(gain);
+    /* Smooth gain */
+    if (newGain == 0 || abs(newGain - gain) > 0.05)
+    {
+      gain = prevGain * 0.8 + newGain * 0.2;
+    }
+
+    prevGain = gain;
+  }
 
   /* range is pretty slow to read, only check every 100 cycles */
   if (USING_DISTANCE_SENSORS && loopCount >= 100)
@@ -295,20 +306,6 @@ void loop()
     range3 = vl1.readRange();
     tcaselect(TCA_IDX_4);
     range4 = vl1.readRange();
-
-    // Serial.print(range1);
-    // Serial.print(" ");
-    // Serial.print(range2);
-    // Serial.print(" ");
-    // Serial.print(range3);
-    // Serial.print(" ");
-    // Serial.print(range4);
-    // Serial.println();
-
-    // f1 = rangeToFilterFreq(range1);
-    // f2 = rangeToFilterFreq(range2);
-    // f3 = rangeToFilterFreq(range3);
-    // f4 = rangeToFilterFreq(range4);
 
     synthVoices[0].SetRange(range1);
     synthVoices[1].SetRange(range2);
@@ -323,25 +320,11 @@ void loop()
     synthVoices[i].Loop();
   }
 
-  // Serial.print(abcsRods[0].GetPulse());
-  // Serial.print(" ");
-  // Serial.print(abcsRods[1].GetPulse());
-  // Serial.print(" ");
-  // Serial.print(abcsRods[2].GetPulse());
-  // Serial.print(" ");
-  // Serial.print(abcsRods[3].GetPulse());
-  // Serial.println();
-
   loopCount++;
 }
 
 void Controls()
 {
-  // hw.controls[4].Process();
-  // gainPot.Process();
-
-  // hw.ProcessAllControls();
-
   for (size_t i = 0; i < NUM_RODS; i++)
   {
     /* Get spin speed */
@@ -362,19 +345,7 @@ void Controls()
     }
   }
 
-  /* Encoder */
-
-  /* Set voice frequencies */
-  // noteVal += hw.encoder.Increment();
-  // float fq = mtof(noteVal);
-
-  // for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
-  // {
-  //   synthVoices[i].SetFundamentalFreq(fq);
-  // }
-
   /* LEDs */
-
-  digitalWrite(PIN_LED_OUT_1, abcsRods[0].GetPulse());
-  digitalWrite(PIN_LED_OUT_2, abcsRods[1].GetPulse());
+  // digitalWrite(PIN_LED_OUT_1, abcsRods[0].GetPulse());
+  // digitalWrite(PIN_LED_OUT_2, abcsRods[1].GetPulse());
 }
