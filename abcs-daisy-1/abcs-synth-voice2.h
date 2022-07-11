@@ -7,6 +7,16 @@ float rangeToFilterFreq(int range)
   return pow(2, exp);
 }
 
+bool isSaw(int wf)
+{
+  return wf == Oscillator::WAVE_POLYBLEP_SAW;
+}
+
+bool isSquare(int wf)
+{
+  return wf == Oscillator::WAVE_POLYBLEP_SQUARE;
+}
+
 class AbcsSynthVoice2
 {
 private:
@@ -43,8 +53,8 @@ private:
   void SetOscFreq()
   {
     realFreq = oscFreq * harmonicMultiplier;
-    float realFreq2 = mtof(50) * harmonicMultiplier;
-    float realFreq3 = mtof(57) * harmonicMultiplier;
+    // float realFreq2 = mtof(50) * harmonicMultiplier;
+    // float realFreq3 = mtof(57) * harmonicMultiplier;
     osc.SetFreq(realFreq);
     // osc2.SetFreq(realFreq2);
     // osc3.SetFreq(realFreq3);
@@ -135,7 +145,14 @@ public:
       sig = sig * (1 - lfoDepth) + (sig * modsig2) * lfoDepth;
     }
 
-    float sigOut = flt.Process(sig);
+    float sigOut = sig;
+
+    /* Only filter saw and square */
+    if (isSaw(waveform) || isSquare(waveform))
+    {
+      sigOut = flt.Process(sig);
+    }
+
     // fonepole(currentDelay, delayTarget, .0002f);
     // fonepole(12000f, sig, 0.05f);
     return sigOut * gain;
@@ -165,12 +182,12 @@ public:
     osc.SetWaveform(waveform);
 
     // adjust volumes
-    if (waveform == Oscillator::WAVE_POLYBLEP_SAW)
+    if (isSaw(waveform))
     {
       osc.SetAmp(0.7F);
     }
 
-    if (waveform == Oscillator::WAVE_POLYBLEP_SQUARE)
+    if (isSquare(waveform))
     {
       osc.SetAmp(0.8F);
     }
@@ -204,19 +221,25 @@ public:
 
   void SetRange(int range)
   {
+    float freq = rangeToFilterFreq(range);
+    SetFilterCutoff(freq);
+
     /* Filter sawtooth and square waves */
-    if (waveform == Oscillator::WAVE_POLYBLEP_SAW || waveform == Oscillator::WAVE_POLYBLEP_SQUARE)
+    if (isSaw(waveform) || isSquare(waveform))
     {
-      float freq = rangeToFilterFreq(range);
       SetGain(1);
-      SetFilterCutoff(freq);
     }
 
     /* Set gain for sine and triangle */
     else
     {
-      SetFilterCutoff(15000);
+      // SetFilterCutoff(15000);
       SetGain(range / 130.f);
+    }
+
+    if (range < 2)
+    {
+      SetGain(0);
     }
   }
 
