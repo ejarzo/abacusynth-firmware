@@ -8,6 +8,7 @@
 #define TCAADDR 0x70
 #define NUM_WAVEFORMS 4
 #define NUM_SYNTHVOICES 4
+#define NUM_POLY_VOICES 2
 #define NUM_RODS 4
 #define NUM_LFO_TARGETS 2
 
@@ -49,6 +50,7 @@
 #define PIN_LED_OUT_1 19
 #define PIN_LED_OUT_2 20
 
+#include "./voice-manager.h"
 #include "./abcs-synth-voice2.h"
 #include "./abcs-rod.h"
 
@@ -82,7 +84,7 @@ AbcsSynthVoice2 synthVoices[NUM_SYNTHVOICES];
 static AdEnv ad;
 static int waveform;
 
-int noteVal;
+int noteVal, noteVal2;
 float attack, release;
 int loopCount = 0;
 uint8_t range1, range2, range3, range4;
@@ -103,6 +105,14 @@ float newGain = 0.0;
 Line gainLine;
 uint8_t gainLineFinished;
 
+Adsr env_;
+bool env_gate_;
+bool active_;
+
+float note_, velocity_;
+
+static VoiceManager<NUM_POLY_VOICES> voice_handler;
+
 /* ======================================================== */
 
 void Controls();
@@ -118,51 +128,134 @@ void tcaselect(uint8_t i)
 
 int harmonicTest = 1;
 
-void handleNoteOn(uint8_t inChannel, uint8_t inNote, uint8_t inVelocity)
-{
-  // harmonicTest++;
-  // synthVoices[0].SetHarmonic(harmonicTest);
-  // return;
-  Serial.println("NOTE ON");
-  noteVal = inNote;
-  float fq = mtof(noteVal);
+bool count = 0;
 
-  for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+Voice *voices = voice_handler.GetVoices();
+
+void handleNoteOn(byte inChannel, byte inNote, byte inVelocity)
+{
+  Serial.print("NOTE ON: ");
+  Serial.print(inNote);
+  Serial.print(" ");
+  Serial.println(inVelocity);
+
+  // Note Off can come in as Note On w/ 0 Velocity
+  if (inVelocity > 0)
   {
-    synthVoices[i].SetFundamentalFreq(fq);
+    voice_handler.OnNoteOn(inNote, inVelocity);
+  }
+  else
+  {
+    voice_handler.OnNoteOff(inNote, inVelocity);
+  }
+
+  Serial.println("voices");
+  for (size_t i = 0; i < NUM_POLY_VOICES; i++)
+  {
+    Voice *v = &voices[i];
+
+    Serial.print(v->GetNote());
+    Serial.print(" ");
+    Serial.println(v->IsActive());
+
+    for (size_t j = 0; j < NUM_SYNTHVOICES; j++)
+    {
+      synthVoices[j].SetFundamentalFreq(mtof(v->GetNote()), i);
+    }
   }
 }
 
-void handleNoteOff(uint8_t inChannel, uint8_t inNote, uint8_t inVelocity)
+void handleNoteOff(byte inChannel, byte inNote, byte inVelocity)
 {
-  Serial.print("MIDI OFF");
-  Serial.print(" ");
-  Serial.print(inChannel);
-  Serial.print(" ");
-  Serial.print(inNote);
-  Serial.print(" ");
-  Serial.print(inVelocity);
-  Serial.println();
-  // if (inVelocity > 0)
-  // {
-  //   noteVal = inNote;
-  // }
-  // voice_handler.OnNoteOff(inNote, inVelocity);
+  Serial.println("note off");
+  Serial.println(inNote);
+  Serial.println(inVelocity);
+  voice_handler.OnNoteOff(inNote, inVelocity);
 }
+
+// void handleNoteOn(uint8_t inChannel, uint8_t inNote, uint8_t inVelocity)
+// {
+//   Serial.println("NOTE ON");
+
+//   /* "Hack" to set ADSR based on MIDI channel */
+//   if (inChannel == 2)
+//   {
+//     setADSR(0.5f, 0.5f, 0.3f, 3.f);
+//   }
+//   else
+//   {
+//     setADSR(0.005f, 0.005f, 0.5f, 0.2f);
+//   }
+
+//   float fq;
+
+//   if (count)
+//   {
+//     noteVal = inNote;
+//     fq = mtof(noteVal);
+//   }
+//   else
+//   {
+//     noteVal2 = inNote;
+//     fq = mtof(noteVal2);
+//   }
+
+//   for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
+//   {
+//     synthVoices[i].SetFundamentalFreq(fq, count);
+//   }
+
+//   count = !count;
+
+//   velocity_ = sqrt(inVelocity / 127.f);
+//   active_ = true;
+//   env_gate_ = true;
+// }
+
+// void handleNoteOff(uint8_t inChannel, uint8_t inNote, uint8_t inVelocity)
+// {
+//   Serial.print("MIDI OFF");
+//   Serial.print(" ");
+//   Serial.print(inChannel);
+//   Serial.print(" ");
+//   Serial.print(inNote);
+//   Serial.print(" ");
+//   Serial.print(inVelocity);
+//   Serial.println();
+
+//   env_gate_ = false;
+//   // if (inVelocity > 0)
+//   // {
+//   //   noteVal = inNote;
+//   // }
+//   // voice_handler.OnNoteOff(inNote, inVelocity);
+// }
+
+float envAmp = 0.0;
 
 void NextSamples(float &sig)
 {
   float result = 0.0;
+  // envAmp = env_.Process(env_gate_);
+
+  float amps = voice_handler.Process();
+
   for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
   {
+    // for (size_t j = 0; j < NUM_POLY_VOICES; j++)
+    // {
+    //   Voice *v = &voices[j];
+    //   synthVoices[i].SetFundamentalFreq(mtof(v->GetNote()), j);
+    // }
     float oscSig = synthVoices[i].Process() / float(NUM_SYNTHVOICES);
     result += oscSig;
   }
 
-  /* Envelope */
-  // sig *= ad_out;
-
   sig = result;
+
+  /* Envelope */
+  // sig *= velocity_;
+  // sig *= envAmp;
 }
 
 void MyCallback(float **in, float **out, size_t size)
@@ -180,6 +273,14 @@ void MyCallback(float **in, float **out, size_t size)
     out[0][i] = sig;
     out[1][i] = sig;
   }
+}
+
+void setADSR(float a, float d, float s, float r)
+{
+  env_.SetTime(ADSR_SEG_ATTACK, a);
+  env_.SetTime(ADSR_SEG_DECAY, d);
+  env_.SetSustainLevel(s);
+  env_.SetTime(ADSR_SEG_RELEASE, r);
 }
 
 void setup()
@@ -225,6 +326,12 @@ void setup()
   sample_rate = DAISY.get_samplerate();
   callback_rate = DAISY.get_callbackrate();
 
+  /* Envelope */
+  env_.Init(sample_rate);
+  setADSR(0.005f, 0.005f, 0.5f, 0.2f);
+
+  voice_handler.Init(sample_rate);
+
   /* For debugging */
   // pinMode(PIN_LED_OUT_1, OUTPUT);
   // pinMode(PIN_LED_OUT_2, OUTPUT);
@@ -240,18 +347,21 @@ void setup()
   }
 
   noteVal = 40;
+  noteVal2 = 50;
   attack = .01f;
   release = .2f;
 
   waveform = waveforms[0];
 
   float fq = mtof(noteVal);
+  float fq2 = mtof(noteVal2);
 
   for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
   {
     synthVoices[i].Init(sample_rate);
     synthVoices[i].SetOscWaveform(waveforms[4 - i]);
-    synthVoices[i].SetFundamentalFreq(fq);
+    synthVoices[i].SetFundamentalFreq(fq, 0);
+    synthVoices[i].SetFundamentalFreq(fq2, 1);
     synthVoices[i].SetHarmonic(i + 1);
   }
 
@@ -277,6 +387,26 @@ void setup()
 
 void loop()
 {
+  for (size_t i = 0; i < NUM_RODS; i++)
+  {
+    /* Get spin speed */
+    abcsRods[i].Process();
+
+    /* TODO: move to loop? */
+    float rotationSpeed = abcsRods[i].GetRotationSpeed();
+    int harmonic = abcsRods[i].GetEncoderVal();
+    int waveform = abcsRods[i].GetWaveformIndex();
+
+    synthVoices[i].SetHarmonic(harmonic);
+    synthVoices[i].SetLfoFreq(rotationSpeed);
+    synthVoices[i].SetOscWaveform(waveforms[waveform]);
+    // synthVoices[i].SetOscWaveform(2 - i);
+    if (abcsRods[i].GetLongPress())
+    {
+      synthVoices[i].IncrementLfoTarget();
+    }
+  }
+
   if (USING_GAIN_POT)
   {
     gainPot.Process();
@@ -325,25 +455,25 @@ void loop()
 
 void Controls()
 {
-  for (size_t i = 0; i < NUM_RODS; i++)
-  {
-    /* Get spin speed */
-    abcsRods[i].Process();
+  // for (size_t i = 0; i < NUM_RODS; i++)
+  // {
+  //   /* Get spin speed */
+  //   abcsRods[i].Process();
 
-    /* TODO: move to loop? */
-    float rotationSpeed = abcsRods[i].GetRotationSpeed();
-    int harmonic = abcsRods[i].GetEncoderVal();
-    int waveform = abcsRods[i].GetWaveformIndex();
+  //   /* TODO: move to loop? */
+  //   float rotationSpeed = abcsRods[i].GetRotationSpeed();
+  //   int harmonic = abcsRods[i].GetEncoderVal();
+  //   int waveform = abcsRods[i].GetWaveformIndex();
 
-    synthVoices[i].SetHarmonic(harmonic);
-    synthVoices[i].SetLfoFreq(rotationSpeed);
-    synthVoices[i].SetOscWaveform(waveforms[waveform]);
-    // synthVoices[i].SetOscWaveform(2 - i);
-    if (abcsRods[i].GetLongPress())
-    {
-      synthVoices[i].IncrementLfoTarget();
-    }
-  }
+  //   synthVoices[i].SetHarmonic(harmonic);
+  //   synthVoices[i].SetLfoFreq(rotationSpeed);
+  //   synthVoices[i].SetOscWaveform(waveforms[waveform]);
+  //   // synthVoices[i].SetOscWaveform(2 - i);
+  //   if (abcsRods[i].GetLongPress())
+  //   {
+  //     synthVoices[i].IncrementLfoTarget();
+  //   }
+  // }
 
   /* LEDs */
   // digitalWrite(PIN_LED_OUT_1, abcsRods[0].GetPulse());
