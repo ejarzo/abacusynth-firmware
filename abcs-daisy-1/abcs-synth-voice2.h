@@ -22,6 +22,9 @@ class AbcsSynthVoice2
 private:
   Oscillator osc;
   Oscillator osc2;
+  Oscillator oscillators[NUM_POLY_VOICES];
+  float oscFreqs[NUM_POLY_VOICES];
+  float realFreqs[NUM_POLY_VOICES];
   // Oscillator osc3;
   // Svf flt;
   Tone flt;
@@ -54,11 +57,18 @@ private:
 
   void SetOscFreq()
   {
-    realFreq = oscFreq * harmonicMultiplier;
-    realFreq2 = oscFreq2 * harmonicMultiplier;
+    // realFreq = oscFreq * harmonicMultiplier;
+    // realFreq2 = oscFreq2 * harmonicMultiplier;
+    for (size_t i = 0; i < NUM_POLY_VOICES; i++)
+    {
+      float fq = oscFreqs[i] * harmonicMultiplier;
+      realFreqs[i] = fq;
+      oscillators[i].SetFreq(fq);
+    }
+
     // float realFreq3 = mtof(57) * harmonicMultiplier;
-    osc.SetFreq(realFreq);
-    osc2.SetFreq(realFreq2);
+    // osc.SetFreq(realFreq);
+    // osc2.SetFreq(realFreq2);
     // osc3.SetFreq(realFreq3);
   }
 
@@ -68,18 +78,26 @@ public:
 
   void Init(float sample_rate)
   {
-    osc.Init(sample_rate);
-    osc2.Init(sample_rate);
+    for (size_t i = 0; i < NUM_POLY_VOICES; i++)
+    {
+      oscFreqs[i] = 0.0f;
+      realFreqs[i] = 0.0f;
+      oscillators[i].Init(sample_rate);
+      oscillators[i].SetAmp(1.0f);
+    }
+
+    // osc.Init(sample_rate);
+    // osc2.Init(sample_rate);
     // osc3.Init(sample_rate);
     flt.Init(sample_rate);
     gainLine.Init(sample_rate);
 
     gain = 1.0f;
     modsig2 = 0.0f;
-    oscFreq = 0.0f;
-    oscFreq2 = 0.0f;
-    realFreq = 0.0f;
-    realFreq2 = 0.0f;
+    // oscFreq = 0.0f;
+    // oscFreq2 = 0.0f;
+    // realFreq = 0.0f;
+    // realFreq2 = 0.0f;
     lfoFreq = 0.0f;
     lfoDepth = 0.0f;
     prevDepth = 0.0f;
@@ -89,8 +107,8 @@ public:
 
     vibratoDepth = lfoDepth * (realFreq * 0.05);
 
-    osc.SetAmp(1.0f);
-    osc2.SetAmp(1.0f);
+    // osc.SetAmp(1.0f);
+    // osc2.SetAmp(1.0f);
     // osc3.SetAmp(1.0f);
 
     flt.SetFreq(filterCutoff);
@@ -108,7 +126,7 @@ public:
     prevFilterCutoff = filterCutoff;
   }
 
-  float Process()
+  float Process(float amps[NUM_POLY_VOICES])
   {
 
     gain = gainLine.Process(&gainLineFinished);
@@ -128,21 +146,35 @@ public:
     /* Vibrato */
     if (lfoTarget == 0)
     {
+      /* TODO move inside loop if possible */
       modsig2 = lfoDepth * (realFreq * 0.05) * sinZ / 2;
-      osc.SetFreq(realFreq + modsig2);
+      for (size_t i = 0; i < NUM_POLY_VOICES; i++)
+      {
+        float fq = realFreqs[i];
+        oscillators[i].SetFreq(fq + modsig2);
+      }
+
+      // osc.SetFreq(realFreq + modsig2);
       // modsig2 = 10 * sinZ;
       // osc.SetFreq(realFreq);
-      osc2.SetFreq(realFreq2 + modsig2);
+      // osc2.SetFreq(realFreq2 + modsig2);
       // osc3.SetFreq(110 + modsig2);
     }
 
-    float sig = osc.Process();
-    float sig2 = oscFreq2 > 0 ? osc2.Process() : 0.f;
+    float sum = 0.0f;
+    for (size_t i = 0; i < NUM_POLY_VOICES; i++)
+    {
+      sum += oscillators[i].Process() * amps[i];
+    }
+
+    sum = sum / NUM_POLY_VOICES;
+
+    // float sig = osc.Process() * amps[0];
+    // float sig2 = osc2.Process() * amps[1];
     // float sig3 = osc3.Process();
+    // float sum = (sig + sig2) / 2;
 
-    float sum = (sig + sig2) / 2;
-
-    sig = sum;
+    float sig = sum;
 
     /* Tremolo */
     if (lfoTarget == 1)
@@ -185,33 +217,34 @@ public:
   void SetOscWaveform(uint8_t wf)
   {
     waveform = wf;
-    osc.SetWaveform(waveform);
-    osc2.SetWaveform(waveform);
-
-    // adjust volumes
-    if (isSaw(waveform))
+    for (size_t i = 0; i < NUM_POLY_VOICES; i++)
     {
-      osc.SetAmp(0.7F);
-      osc2.SetAmp(0.7F);
-    }
+      oscillators[i].SetWaveform(waveform);
 
-    if (isSquare(waveform))
-    {
-      osc.SetAmp(0.8F);
-      osc2.SetAmp(0.8F);
+      // adjust volumes
+      if (isSaw(waveform))
+      {
+        oscillators[i].SetAmp(0.7F);
+      }
+
+      if (isSquare(waveform))
+      {
+        oscillators[i].SetAmp(0.8F);
+      }
     }
   }
 
   void SetFundamentalFreq(float freq, int target)
   {
-    if (target == 0)
-    {
-      oscFreq = freq;
-    }
-    if (target == 1)
-    {
-      oscFreq2 = freq;
-    }
+    oscFreqs[target] = freq;
+    // if (target == 0)
+    // {
+    //   oscFreq = freq;
+    // }
+    // if (target == 1)
+    // {
+    //   oscFreq2 = freq;
+    // }
     SetOscFreq();
   }
 
@@ -261,8 +294,12 @@ public:
 
   void SetAmp(float amp)
   {
-    osc.SetAmp(amp);
-    osc2.SetAmp(amp);
+    for (size_t i = 0; i < NUM_POLY_VOICES; i++)
+    {
+      oscillators[i].SetAmp(amp);
+    }
+    // osc.SetAmp(amp);
+    // osc2.SetAmp(amp);
   }
   void SetGain(float targetGain) { gainLine.Start(gain, fclamp(targetGain, 0, 1), 0.2); }
 };

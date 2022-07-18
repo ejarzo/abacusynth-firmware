@@ -1,5 +1,10 @@
 #include "DaisyDuino.h"
 #include <string>
+#include <queue>
+
+using namespace daisysp;
+
+/* ========================= Single Voice ========================= */
 
 class Voice
 {
@@ -13,10 +18,7 @@ public:
     // osc_.SetAmp(0.75f);
     // osc_.SetWaveform(Oscillator::WAVE_POLYBLEP_SAW);
     env_.Init(samplerate);
-    env_.SetSustainLevel(0.5f);
-    env_.SetTime(ADSR_SEG_ATTACK, 0.005f);
-    env_.SetTime(ADSR_SEG_DECAY, 0.005f);
-    env_.SetTime(ADSR_SEG_RELEASE, 0.2f);
+    setADSR(0.005f, 0.1f, 0.5f, 0.2f);
     // filt_.Init(samplerate);
     // filt_.SetFreq(6000.f);
     // filt_.SetRes(0.6f);
@@ -68,6 +70,7 @@ public:
   // void SetCutoff(float val) { filt_.SetFreq(val); }
 
   inline bool IsActive() const { return active_; }
+  inline bool IsEnvGate() const { return env_gate_; }
   inline int GetNote() const { return note_; }
 
 private:
@@ -78,6 +81,8 @@ private:
   bool active_;
   bool env_gate_;
 };
+
+/* ========================= Polyphony Voice Manager ========================= */
 
 template <size_t max_voices>
 class VoiceManager
@@ -119,20 +124,20 @@ public:
     }
   }
 
-  void OnNoteOn(int notenumber, int velocity)
+  void OnNoteOn(int noteNumber, int velocity)
   {
-    Voice *v = FindFreeVoice();
+    Voice *v = FindFreeVoice(noteNumber);
     if (v == NULL)
       return;
-    v->OnNoteOn(notenumber, velocity);
+    v->OnNoteOn(noteNumber, velocity);
   }
 
-  void OnNoteOff(int notenumber, int velocity)
+  void OnNoteOff(int noteNumber, int velocity)
   {
     for (size_t i = 0; i < max_voices; i++)
     {
       Voice *v = &voices[i];
-      if (v->IsActive() && v->GetNote() == notenumber)
+      if (v->IsActive() && v->GetNote() == noteNumber)
       {
         v->OnNoteOff();
       }
@@ -149,9 +154,25 @@ public:
 
 private:
   Voice voices[max_voices];
-  Voice *FindFreeVoice()
+  // queue<int> oldestVoices;
+  Voice *FindFreeVoice(int noteNumber)
   {
     Voice *v = NULL;
+
+    /* Re-trigger if same note */
+    for (size_t i = 0; i < max_voices; i++)
+    {
+      if (voices[i].GetNote() == noteNumber)
+      {
+        v = &voices[i];
+        break;
+      }
+    }
+
+    if (v)
+      return v;
+
+    /* Find inactive voices */
     for (size_t i = 0; i < max_voices; i++)
     {
       if (!voices[i].IsActive())
@@ -160,26 +181,19 @@ private:
         break;
       }
     }
-    return v;
+    if (v)
+      return v;
+
+    /* Find voices in the release phase */
+    for (size_t i = 0; i < max_voices; i++)
+    {
+      if (!voices[i].IsEnvGate())
+      {
+        v = &voices[i];
+        break;
+      }
+    }
+    if (v)
+      return v;
   }
 };
-
-// void AudioCallback(float *in, float *out, size_t size)
-// {
-//   float sum = 0.f;
-//   hw.ProcessDigitalControls();
-//   hw.ProcessAnalogControls();
-//   if (hw.buttons[0].FallingEdge())
-//   {
-//     voice_handler.FreeAllVoices();
-//   }
-//   voice_handler.SetCutoff(250.f + hw.GetKnobValue(0) * 8000.f);
-
-//   for (size_t i = 0; i < size; i += 2)
-//   {
-//     sum = 0.f;
-//     sum = voice_handler.Process() * 0.5f;
-//     out[i] = sum;
-//     out[i + 1] = sum;
-//   }
-// }

@@ -139,6 +139,12 @@ void handleNoteOn(byte inChannel, byte inNote, byte inVelocity)
   Serial.print(" ");
   Serial.println(inVelocity);
 
+  /* Overflow due to MIDI not being read fast enough */
+  if (inVelocity > 127)
+  {
+    return;
+  }
+
   // Note Off can come in as Note On w/ 0 Velocity
   if (inVelocity > 0)
   {
@@ -228,26 +234,28 @@ void handleNoteOff(byte inChannel, byte inNote, byte inVelocity)
 //   // {
 //   //   noteVal = inNote;
 //   // }
-//   // voice_handler.OnNoteOff(inNote, inVelocity);
-// }
-
+//   // voice_handler.OnNoteOff(inNote, inVelocity); // }
 float envAmp = 0.0;
+
+float amps[NUM_POLY_VOICES];
 
 void NextSamples(float &sig)
 {
   float result = 0.0;
   // envAmp = env_.Process(env_gate_);
+  // float amps = voice_handler.Process();
 
-  float amps = voice_handler.Process();
+  /* Get amplitude envelopes from voices */
+  for (size_t i = 0; i < NUM_POLY_VOICES; i++)
+  {
+    Voice *v = &voices[i];
+    amps[i] = v->Process();
+  }
 
+  /* Pass amps to each rod */
   for (size_t i = 0; i < NUM_SYNTHVOICES; i++)
   {
-    // for (size_t j = 0; j < NUM_POLY_VOICES; j++)
-    // {
-    //   Voice *v = &voices[j];
-    //   synthVoices[i].SetFundamentalFreq(mtof(v->GetNote()), j);
-    // }
-    float oscSig = synthVoices[i].Process() / float(NUM_SYNTHVOICES);
+    float oscSig = synthVoices[i].Process(amps) / float(NUM_SYNTHVOICES);
     result += oscSig;
   }
 
@@ -262,7 +270,7 @@ void MyCallback(float **in, float **out, size_t size)
 {
   MIDI.read();
 
-  Controls();
+  // Controls();
 
   for (size_t i = 0; i < size; i++)
   {
@@ -387,6 +395,7 @@ void setup()
 
 void loop()
 {
+  // return;
   for (size_t i = 0; i < NUM_RODS; i++)
   {
     /* Get spin speed */
