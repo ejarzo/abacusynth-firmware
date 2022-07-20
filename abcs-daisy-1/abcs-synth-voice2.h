@@ -20,30 +20,31 @@ bool isSquare(int wf)
 class AbcsSynthVoice2
 {
 private:
-  Oscillator osc;
-  Oscillator osc2;
   Oscillator oscillators[NUM_POLY_VOICES];
+
   float oscFreqs[NUM_POLY_VOICES];
   float realFreqs[NUM_POLY_VOICES];
-  // Oscillator osc3;
+  float modSigs[NUM_POLY_VOICES];
+
   // Svf flt;
   Tone flt;
-
   Line gainLine;
 
-  float modsig2;
   float oscFreq;
   float oscFreq2;
   float realFreq;
   float realFreq2;
+
   float lfoFreq;
   float lfoDepth;
   float prevDepth;
+
   uint8_t waveform;
   uint8_t lfoTarget;
+  uint8_t harmonicMultiplier;
+
   float filterCutoff;
   float prevFilterCutoff;
-  float harmonicMultiplier;
 
   float vibratoDepth;
   float gain;
@@ -57,19 +58,14 @@ private:
 
   void SetOscFreq()
   {
-    // realFreq = oscFreq * harmonicMultiplier;
-    // realFreq2 = oscFreq2 * harmonicMultiplier;
     for (size_t i = 0; i < NUM_POLY_VOICES; i++)
     {
       float fq = oscFreqs[i] * harmonicMultiplier;
       realFreqs[i] = fq;
+      modSigs[i] = (fq * 0.05) / 2;
+      // modSigs[i] = lfoDepth * (fq * 0.05) / 2;
       oscillators[i].SetFreq(fq);
     }
-
-    // float realFreq3 = mtof(57) * harmonicMultiplier;
-    // osc.SetFreq(realFreq);
-    // osc2.SetFreq(realFreq2);
-    // osc3.SetFreq(realFreq3);
   }
 
 public:
@@ -86,34 +82,22 @@ public:
       oscillators[i].SetAmp(1.0f);
     }
 
-    // osc.Init(sample_rate);
-    // osc2.Init(sample_rate);
-    // osc3.Init(sample_rate);
     flt.Init(sample_rate);
     gainLine.Init(sample_rate);
 
     gain = 1.0f;
-    modsig2 = 0.0f;
-    // oscFreq = 0.0f;
-    // oscFreq2 = 0.0f;
-    // realFreq = 0.0f;
-    // realFreq2 = 0.0f;
     lfoFreq = 0.0f;
     lfoDepth = 0.0f;
     prevDepth = 0.0f;
+
     filterCutoff = 15000;
     prevFilterCutoff = 15000;
-    harmonicMultiplier = 1.f;
 
-    vibratoDepth = lfoDepth * (realFreq * 0.05);
+    harmonicMultiplier = 1;
 
-    // osc.SetAmp(1.0f);
-    // osc2.SetAmp(1.0f);
-    // osc3.SetAmp(1.0f);
+    // vibratoDepth = lfoDepth * (realFreq * 0.05);
 
     flt.SetFreq(filterCutoff);
-    // flt.SetRes(0.3f);
-
     SetLfoTarget(1);
   }
 
@@ -121,66 +105,43 @@ public:
   {
     /* TODO: confirm working */
     filterCutoff = filterCutoff * 0.08 + prevFilterCutoff * 0.92;
-    // filterCutoff = filterCutoff * 0.999999;
     flt.SetFreq(filterCutoff);
     prevFilterCutoff = filterCutoff;
   }
 
   float Process(float amps[NUM_POLY_VOICES])
   {
-
-    gain = gainLine.Process(&gainLineFinished);
-
-    // float f = lfoFreq / 10000.0;
-
-    /* TODO: maybe not needed in process? */
-    // filterCutoff = filterCutoff * 0.08 + prevFilterCutoff * 0.92;
-    // flt.SetFreq(filterCutoff);
-    // prevFilterCutoff = filterCutoff;
-
     // iterate oscillator
     sinZ = sinZ + lfoFreq * cosZ;
     cosZ = cosZ - lfoFreq * sinZ;
-    // float realFreq = oscFreq * harmonicMultiplier;
 
-    /* Vibrato */
-    if (lfoTarget == 0)
-    {
-      /* TODO move inside loop if possible */
-      modsig2 = lfoDepth * (realFreq * 0.05) * sinZ / 2;
-      for (size_t i = 0; i < NUM_POLY_VOICES; i++)
-      {
-        float fq = realFreqs[i];
-        oscillators[i].SetFreq(fq + modsig2);
-      }
-
-      // osc.SetFreq(realFreq + modsig2);
-      // modsig2 = 10 * sinZ;
-      // osc.SetFreq(realFreq);
-      // osc2.SetFreq(realFreq2 + modsig2);
-      // osc3.SetFreq(110 + modsig2);
-    }
+    // if (!gainLineFinished)
+    // {
+    gain = gainLine.Process(&gainLineFinished);
+    // }
 
     float sum = 0.0f;
+
     for (size_t i = 0; i < NUM_POLY_VOICES; i++)
     {
+      /* Vibrato */
+      if (lfoTarget == 0)
+      {
+        float fq = realFreqs[i];
+        float modSig = lfoDepth * modSigs[i] * sinZ;
+        oscillators[i].SetFreq(fq + modSig);
+        /* Todo reset freq (once) if not vibrato */
+      }
       sum += oscillators[i].Process() * amps[i];
     }
 
-    sum = sum / NUM_POLY_VOICES;
-
-    // float sig = osc.Process() * amps[0];
-    // float sig2 = osc2.Process() * amps[1];
-    // float sig3 = osc3.Process();
-    // float sum = (sig + sig2) / 2;
-
-    float sig = sum;
+    float sig = sum / NUM_POLY_VOICES;
 
     /* Tremolo */
     if (lfoTarget == 1)
     {
-      modsig2 = sinZ / 2 + 1.0;
-      sig = sig * (1 - lfoDepth) + (sig * modsig2) * lfoDepth;
+      float modSig = sinZ / 2 + 1.0;
+      sig = sig * (1 - lfoDepth) + (sig * modSig) * lfoDepth;
     }
 
     float sigOut = sig;
@@ -191,8 +152,6 @@ public:
       sigOut = flt.Process(sig);
     }
 
-    // fonepole(currentDelay, delayTarget, .0002f);
-    // fonepole(12000f, sig, 0.05f);
     return sigOut * gain;
   }
 
@@ -259,7 +218,7 @@ public:
   {
     lfoDepth = depth * 0.05 + prevDepth * 0.95;
     prevDepth = lfoDepth;
-    vibratoDepth = lfoDepth * (realFreq * 0.05);
+    // vibratoDepth = lfoDepth * (realFreq * 0.05);
   }
 
   void SetFilterCutoff(float freq)
